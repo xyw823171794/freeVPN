@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import urllib.error
 import urllib.request
 import zipfile
@@ -39,7 +40,8 @@ RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 SRC_ZIP = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
 
 UA = f"freeVPN-updater/{ver.__version__}"
-TIMEOUT = 30
+TIMEOUT = 30          # 下载用: urlopen 的 timeout 是单次读超时, 大包要留够
+API_TIMEOUT = 10      # 版本查询用 —— 超过 10 秒基本就是被掐了, 早点告诉用户
 MAX_PACKAGE_BYTES = 200 * 1024 * 1024
 
 # 更新包里**不允许**覆盖的顶层项 —— 全是用户的运行数据
@@ -67,9 +69,52 @@ def is_newer(remote: str, local: str = None) -> bool:
 # --------------------------------------------------------------------------
 # 取远端信息
 # --------------------------------------------------------------------------
-def _get(url: str, timeout: int = TIMEOUT) -> bytes:
+# 本机常见代理端口。国内直连 GitHub 经常被掐(TCP 能连、TLS 握手被打断), 而
+# 同一时刻走本机代理正常。双击运行的 exe 没有 HTTPS_PROXY 环境变量, 所以直连
+# 失败时自动借一下本机代理 —— 只连回环, 不做任何外部探测。
+PROXY_CANDIDATES = ("http://127.0.0.1:7897", "http://127.0.0.1:7890",
+                    "http://127.0.0.1:10809", "http://127.0.0.1:10808",
+                    "http://127.0.0.1:2080", "http://127.0.0.1:1080")
+
+
+def local_proxy() -> str | None:
+    """本机开着的常见代理端口(毫秒级探测, 不通就跳过)。"""
+    env = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if env:
+        return env            # 用户显式指定了, 优先用
+    for p in PROXY_CANDIDATES:
+        try:
+            port = int(p.rsplit(":", 1)[1])
+        except ValueError:
+            continue
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def _open_via(proxy: str, req, timeout: int):
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    return opener.open(req, timeout=timeout)
+
+
+def _get(url: str, timeout: int = API_TIMEOUT) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA,
                                                "Accept": "application/vnd.github+json"})
+    # 本机有代理就**先走代理**: 国内直连 GitHub 基本都要靠它, 先直连等于白等
+    # 一个 10 秒超时。代理不通再退回直连。
+    p = local_proxy()
+    if p:
+        try:
+            with _open_via(p, req, min(timeout, 8)) as r:
+                return r.read()
+        except urllib.error.HTTPError:
+            raise          # 服务器有响应 —— 网络是通的, 换路没意义
+        except Exception as e:
+            print(f"[*] 本机代理 {p} 走不通({type(e).__name__}), 改直连")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -115,7 +160,7 @@ def remote_info() -> dict:
 
     # 回退: 直接读 main 分支的 version.py —— 只下几 KB, 比拉整包再比版本划算
     try:
-        txt = _get(f"{RAW}/version.py", timeout=15).decode("utf-8", "replace")
+        txt = _get(f"{RAW}/version.py", timeout=API_TIMEOUT).decode("utf-8", "replace")
     except Exception:
         txt = ""
     m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', txt)
@@ -129,15 +174,29 @@ def remote_info() -> dict:
 # --------------------------------------------------------------------------
 # 下载 / 解压
 # --------------------------------------------------------------------------
-def download(url: str, dest: Path, quiet: bool = False) -> Path:
-    """下载到 dest。带体积上限与进度输出。"""
+def download(url: str, dest: Path, quiet: bool = False, on_progress=None) -> Path:
+    """下载到 dest。带体积上限与进度输出。
+
+    on_progress(got, total) 给 GUI 用 —— 有回调时不再往 stdout 打进度。
+    """
     if not url.lower().startswith("https://"):
         raise ValueError(f"更新包必须是 https: {url}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     tmp = dest.with_suffix(dest.suffix + ".part")
+    p = local_proxy()          # 有代理就先走代理, 见 _get 的说明
+    try:
+        resp = (_open_via(p, req, TIMEOUT) if p
+                else urllib.request.urlopen(req, timeout=TIMEOUT))
+    except urllib.error.HTTPError:
+        raise                      # 服务器有响应, 网络是通的
+    except Exception as e:
+        if not p:
+            raise
+        print(f"[*] 本机代理 {p} 走不通({type(e).__name__}), 改直连")
+        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
     got = 0
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r, open(tmp, "wb") as fh:
+    with resp as r, open(tmp, "wb") as fh:
         total = int(r.headers.get("Content-Length") or 0)
         while True:
             chunk = r.read(262144)
@@ -149,11 +208,16 @@ def download(url: str, dest: Path, quiet: bool = False) -> Path:
                 tmp.unlink(missing_ok=True)
                 raise ValueError(f"更新包超过 {MAX_PACKAGE_BYTES // 1048576}MB, 已中止")
             fh.write(chunk)
-            if not quiet and total:
+            if on_progress is not None:
+                try:
+                    on_progress(got, total)
+                except Exception:
+                    pass
+            elif not quiet and total:
                 pct = got * 100 // total
                 print(f"\r    下载 {got // 1024 // 1024}MB / {total // 1024 // 1024}MB"
                       f"  {pct}%", end="", flush=True)
-    if not quiet:
+    if not quiet and on_progress is None:
         print()
     os.replace(tmp, dest)
     return dest

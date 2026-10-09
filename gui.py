@@ -18,6 +18,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -35,6 +36,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import security as sec  # noqa: E402
 import version as ver  # noqa: E402
+# 在线更新: 只下载 + 生成替换脚本, 不自动执行(见 updater.py 开头)
+import updater  # noqa: E402
 
 # 打包成 exe 后 __file__ 在临时解包目录, 根目录必须用 exe 自己所在的位置
 ROOT = sec.app_root()
@@ -65,6 +68,17 @@ def run_hidden(cmd, timeout: int = 20):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                           encoding=sec.console_encoding(), errors="replace",
                           creationflags=NO_WINDOW)
+
+
+def proxy_tip() -> str:
+    """直连 GitHub 不通时的提示(国内是常态: TCP 能连、TLS 握手被打断)。"""
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        return ("当前已设 HTTPS_PROXY —— 如果它本身不通，换一个代理端口再启动本程序。")
+    return ("国内直连 GitHub 经常被掐（表现为连接重置 / 握手超时）。\n"
+            "给本程序指一个代理再启动即可：\n\n"
+            "    set HTTPS_PROXY=http://127.0.0.1:7897\n"
+            "    freeVPN.exe\n\n"
+            "端口按你代理软件里实际的监听端口改。")
 
 
 def pid_alive(pid: int) -> bool:
@@ -141,6 +155,10 @@ class PoolGUI:
         self.root = root
         self.port = port
         self.logq: queue.Queue[str] = queue.Queue()
+        # 更新线程 -> 主线程的回调队列。
+        # **不要**从工作线程直接调 root.after: tkinter 不是线程安全的,
+        # 实测回调会丢(状态永远停在"正在检查")。走队列, 主线程轮询。
+        self._updq: queue.Queue = queue.Queue()
         self.proc: subprocess.Popen | None = None
         self.busy = False
         self._nodes: list[dict] = []
@@ -175,6 +193,8 @@ class PoolGUI:
         # 首次打开时自己把常驻拉起来 —— 用户要的是"双击就能用",
         # 而不是打开一个空壳再去点按钮。之后由常驻自己按节奏刷新。
         self.root.after(600, self.autostart_first_run)
+        # 启动 4 秒后悄悄查一次更新 —— 放在最后, 不跟前面几件事抢网络
+        self.root.after(4000, self.upd_auto_check)
 
     def check_confined(self):
         why = sec.write_confined()
@@ -328,6 +348,7 @@ class PoolGUI:
         # 页签
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        self.nb = nb          # 存起来: 截图脚本和"跳到某页"要用
 
         # 节点
         f1 = ttk.Frame(nb, padding=8)
@@ -381,6 +402,247 @@ class PoolGUI:
         ttk.Label(f3, text="改完需要重启常驻才生效（点上面的「启动常驻」会重起）",
                   style="Dim.TLabel") \
             .grid(row=len(rows) * 2 + 2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        # 更新
+        f4 = ttk.Frame(nb, padding=16)
+        nb.add(f4, text="  更新  ")
+        self._build_update(f4)
+
+    # ---------------- 更新页 ----------------
+    def _build_update(self, parent):
+        """检查 / 下载 / 准备替换。
+
+        **只下载, 不自动执行** —— Windows 上程序没法覆盖正在运行的自己, 而且
+        "下载即执行"本来就是最糟的更新设计(见 updater.py 开头)。这里下完生成
+        一个替换脚本, 由用户关掉程序后双击。
+        """
+        conf = load_json(CONF) or {}
+        self._upd_busy = False
+        self._upd_info: dict | None = None
+
+        box = ttk.LabelFrame(parent, text=" 版本 ", padding=12)
+        box.pack(fill="x")
+        ttk.Label(box, text=f"当前   v{ver.__version__}   ({ver.__release_date__})") \
+            .grid(row=0, column=0, sticky="w")
+        self.lb_upd_remote = ttk.Label(box, text="最新   —", style="Dim.TLabel")
+        self.lb_upd_remote.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Button(box, text="检查更新", command=self.upd_check) \
+            .grid(row=0, column=1, rowspan=2, padx=(24, 0))
+        self.lb_upd_state = ttk.Label(box, text="还没检查过", style="Dim.TLabel")
+        self.lb_upd_state.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.pb_upd = ttk.Progressbar(box, mode="determinate", maximum=100, length=360)
+        self.pb_upd.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        opt = ttk.LabelFrame(parent, text=" 自动 ", padding=12)
+        opt.pack(fill="x", pady=(12, 0))
+        self.var_upd_autocheck = tk.BooleanVar(
+            value=bool(conf.get("auto_check_update", True)))
+        self.var_upd_autodl = tk.BooleanVar(
+            value=bool(conf.get("auto_download_update", False)))
+        ttk.Checkbutton(opt, text="启动时自动检查更新",
+                        variable=self.var_upd_autocheck,
+                        command=self.upd_save_opts).pack(anchor="w")
+        ttk.Checkbutton(opt, text="发现新版时自动下载（只是下载，装不装由你点）",
+                        variable=self.var_upd_autodl,
+                        command=self.upd_save_opts).pack(anchor="w", pady=(6, 0))
+
+        act = ttk.Frame(parent)
+        act.pack(fill="x", pady=(14, 0))
+        self.btn_upd_dl = ttk.Button(act, text="下载并准备更新", style="Accent.TButton",
+                                     command=self.upd_download, state="disabled")
+        self.btn_upd_dl.pack(side="left")
+        ttk.Button(act, text="打开更新目录", command=self.upd_open_dir) \
+            .pack(side="left", padx=(8, 0))
+        ttk.Button(act, text="看仓库", command=self.upd_open_repo) \
+            .pack(side="left", padx=(8, 0))
+
+        self.txt_upd = scrolledtext.ScrolledText(
+            parent, height=9, bg=PANEL, fg=FG, insertbackground=FG, borderwidth=0,
+            font=("Consolas", 9), wrap="word", state="disabled")
+        self.txt_upd.pack(fill="both", expand=True, pady=(12, 0))
+        self.upd_note(f"更新源: https://github.com/{updater.REPO}\n\n"
+                      "点「检查更新」看有没有新版。下载完成后，关掉本程序、"
+                      "双击生成的 apply-update.bat 即可完成替换。\n\n"
+                      "state\\ out\\ bin\\ 订阅地址.txt 都不会被覆盖。")
+
+    def upd_set_state(self, text: str, color: str = DIM):
+        self.lb_upd_state.config(text=text, foreground=color)
+
+    def upd_note(self, text: str):
+        self.txt_upd.config(state="normal")
+        self.txt_upd.delete("1.0", "end")
+        self.txt_upd.insert("end", text)
+        self.txt_upd.config(state="disabled")
+
+    def upd_check(self, silent: bool = False):
+        if self._upd_busy:
+            return
+        self._upd_busy = True
+        self.btn_upd_dl.config(state="disabled")
+        self.pb_upd.config(value=0)
+        self.upd_set_state("正在检查 GitHub …", BLUE)
+        threading.Thread(target=self._upd_check_worker, args=(silent,),
+                         daemon=True).start()
+
+    def _upd_check_worker(self, silent: bool):
+        info, err = None, None
+        try:
+            info = updater.remote_info()
+        except Exception as e:                     # 网络/解析都可能炸
+            err = e
+        self._upd_post(self._upd_check_done, info, err, silent)
+
+    def _upd_check_done(self, info, err, silent: bool):
+        self._upd_busy = False
+        if err is not None:
+            self.upd_set_state(f"检查失败：{type(err).__name__}", RED)
+            if not silent:
+                self.say(f"[!] 检查更新失败: {type(err).__name__}: {err}")
+                messagebox.showerror("检查更新失败", f"{err}\n\n{proxy_tip()}")
+            return
+
+        rv = (info or {}).get("version") or ""
+        if not rv:
+            self.upd_set_state("查不到远端版本（网络不通，或仓库还没有 release/tag）", AMBER)
+            self.lb_upd_remote.config(text="最新   —", foreground=DIM)
+            if not silent:
+                messagebox.showwarning("查不到版本", proxy_tip())
+            return
+
+        self._upd_info = info
+        kind = {"release": "Release（含打包的 exe）",
+                "release-source": "Release（只有源码包）",
+                "source": "main 分支源码"}.get(info.get("kind"), str(info.get("kind")))
+        newer = updater.is_newer(rv, ver.__version__)
+        self.lb_upd_remote.config(text=f"最新   v{rv}   （{kind}）",
+                                  foreground=GREEN if newer else DIM)
+
+        if not newer:
+            self.upd_set_state(f"已是最新（v{rv}）", DIM)
+            self.upd_note(f"本地 v{ver.__version__} 已经是最新。\n\n"
+                          f"更新源: https://github.com/{updater.REPO}\n"
+                          f"远端来源: {kind}")
+            return
+
+        self.upd_set_state(f"发现新版本 v{rv}", GREEN)
+        self.btn_upd_dl.config(state="normal")
+        self.say(f"[更新] 发现新版本 v{rv}（{kind}）")
+        notes = (info.get("notes") or "").strip()
+        body = [f"v{ver.__version__}  →  v{rv}", f"来源: {kind}"]
+        if info.get("published"):
+            body.append(f"发布于: {info['published']}")
+        body.append("")
+        body.append(notes if notes else "（这次没有写更新说明）")
+        body.append("")
+        body.append("点「下载并准备更新」——下载完关掉本程序、双击 apply-update.bat 完成替换。")
+        self.upd_note("\n".join(body))
+
+        if self.var_upd_autodl.get():
+            self.say("[更新] 已开启自动下载，开始下载 …")
+            self.upd_download()
+
+    def upd_download(self):
+        if self._upd_busy or not self._upd_info:
+            return
+        rv = self._upd_info.get("version") or ""
+        if not rv:
+            return
+        self._upd_busy = True
+        self.btn_upd_dl.config(state="disabled")
+        self.pb_upd.config(value=0)
+        self.upd_set_state(f"正在下载 v{rv} …", BLUE)
+        threading.Thread(target=self._upd_dl_worker,
+                         args=(self._upd_info, rv), daemon=True).start()
+
+    def _upd_dl_worker(self, info: dict, rv: str):
+        bat, err, n = None, None, 0
+        try:
+            stage = updater.update_dir() / rv
+            if stage.exists():
+                shutil.rmtree(stage, ignore_errors=True)
+            stage.mkdir(parents=True, exist_ok=True)
+            pkg = stage / f"freeVPN-{rv}.zip"
+            updater.download(
+                info["url"], pkg, quiet=True,
+                on_progress=lambda g, t: self._upd_post(self._upd_progress, g, t))
+            payload = stage / "payload"
+            payload.mkdir(parents=True, exist_ok=True)
+            root_dir, n = updater.extract_package(pkg, payload)
+            pv = updater.package_version(root_dir)
+            if pv and updater.ver_tuple(pv) != updater.ver_tuple(rv):
+                raise ValueError(f"包内版本 {pv} 与远端声明 {rv} 不一致，已放弃")
+            bat = updater.write_apply_script(stage)
+        except Exception as e:
+            err = e
+        self._upd_post(self._upd_dl_done, bat, err, rv, n)
+
+    def _upd_progress(self, got: int, total: int):
+        if total:
+            pct = min(100, got * 100 // total)
+            self.pb_upd.config(value=pct)
+            self.upd_set_state(
+                f"正在下载 {got // 1048576}MB / {total // 1048576}MB   {pct}%", BLUE)
+        else:
+            self.upd_set_state(f"正在下载 {got // 1024}KB …", BLUE)
+
+    def _upd_dl_done(self, bat, err, rv: str, n: int):
+        self._upd_busy = False
+        if err is not None:
+            self.upd_set_state(f"下载失败：{type(err).__name__}", RED)
+            self.btn_upd_dl.config(state="normal")
+            self.say(f"[!] 下载更新失败: {type(err).__name__}: {err}")
+            messagebox.showerror("下载失败", f"{err}\n\n{proxy_tip()}")
+            return
+        self.pb_upd.config(value=100)
+        self.upd_set_state(f"v{rv} 已就绪 —— 关掉本程序后双击 {bat.name}", GREEN)
+        self.say(f"[更新] v{rv} 已下载并解压（{n} 个文件）")
+        self.say(f"[更新] 关掉 freeVPN 后双击: {bat}")
+        self.upd_note(
+            f"v{rv} 已下载并解压完成。\n\n"
+            f"替换脚本: {bat}\n\n"
+            "接下来：\n"
+            "  1. 关掉本窗口（常驻也要退干净）\n"
+            f"  2. 双击 {bat.name}\n"
+            "  3. 它会覆盖程序文件，然后自动启动新版本\n\n"
+            "state\\ out\\ bin\\ 订阅地址.txt 都不会被动。")
+        if messagebox.askyesno(
+                "更新已就绪",
+                f"v{rv} 已下载并解压。\n\n"
+                f"关掉程序后双击 {bat.name} 就能完成替换。\n\n"
+                "现在打开更新目录吗？"):
+            self.upd_open_dir()
+
+    def upd_save_opts(self):
+        try:
+            conf = load_json(CONF) or {}
+            conf["auto_check_update"] = bool(self.var_upd_autocheck.get())
+            conf["auto_download_update"] = bool(self.var_upd_autodl.get())
+            CONF.write_text(json.dumps(conf, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+            self.say(f"更新设置已保存（自动检查={conf['auto_check_update']}, "
+                     f"自动下载={conf['auto_download_update']}）")
+        except Exception as e:
+            self.say(f"[!] 保存更新设置失败: {e}")
+
+    def upd_open_dir(self):
+        d = updater.update_dir()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(d))
+        except Exception as e:
+            messagebox.showerror("打不开更新目录", str(e))
+
+    def upd_open_repo(self):
+        try:
+            os.startfile(f"https://github.com/{updater.REPO}")
+        except Exception as e:
+            messagebox.showerror("打不开", str(e))
+
+    def upd_auto_check(self):
+        """启动时静默查一次 —— 有新版才出声。"""
+        if not self.var_upd_autocheck.get():
+            return
+        self.upd_check(silent=True)
 
     def _card(self, parent, title, value):
         f = tk.Frame(parent, bg=PANEL, highlightthickness=0)
@@ -582,7 +844,24 @@ class PoolGUI:
                 self.log.config(state="disabled")
         except queue.Empty:
             pass
+        self._drain_upd()
         self.root.after(120, self._drain_log)
+
+    def _upd_post(self, fn, *args):
+        """从更新线程把回调丢给主线程执行。"""
+        self._updq.put((fn, args))
+
+    def _drain_upd(self):
+        """主线程侧: 把更新线程排下的回调跑掉。"""
+        try:
+            while True:
+                fn, args = self._updq.get_nowait()
+                try:
+                    fn(*args)
+                except Exception as e:
+                    self.logq_put(f"!! 更新回调异常: {type(e).__name__}: {e}")
+        except queue.Empty:
+            pass
 
     # ---------------- 操作 ----------------
     def say(self, text: str):

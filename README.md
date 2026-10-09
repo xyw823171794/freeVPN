@@ -126,7 +126,8 @@ python state/test_service.py     # 访问控制 16 项
 python state/test_naming.py      # 节点名/分组名冲突
 python state/test_cn_rules.py    # 国内分流: 数据文件 + 规则语义 + 内核真实裁决 + fake-ip 场景 (60 项)
 python state/test-l1-udp.py      # L1 不能把 QUIC(hysteria/tuic) 节点当死节点筛掉 (22 项)
-python state/test_updater.py     # 在线更新: 版本比较 + zip slip + 受保护文件 (21 项)
+python state/test_updater.py     # 在线更新: 版本比较 + zip slip + 受保护文件 + apply 脚本 (32 项)
+python state/test-gui-update.py  # 控制台更新页: 控件/初始状态/选项落盘/后台线程 (23 项)
 python state/verify.py           # 端到端: 内核加载产物 + 真实 HTTP 出网
 ```
 
@@ -208,7 +209,19 @@ python pool.py gui
 | 节点页 | 节点名、协议、地区、实测延迟、TCP 延迟；**点列头排序**，再点切换升降序 |
 | 日志页 | 所有操作都是起子进程，输出**流式回显**在这里 |
 | 设置页 | 扫描间隔、L2 并发、负缓存参数，直接写 `pool.conf.json` |
+| 更新页 | 当前/最新版本、检查更新、下载并准备替换；两个自动开关 |
 | 订阅地址 | 输入框 + 复制按钮 |
+
+**更新页**就是「在线更新」那套的图形入口：点「检查更新」看有没有新版，有就点
+「下载并准备更新」——下完弹窗告诉你关掉程序、双击 `apply-update.bat` 完成替换
+（程序没法覆盖正在运行的自己，这一步必须你点）。
+
+两个开关写在 `pool.conf.json` 里：
+
+| 键 | 默认 | 含义 |
+|---|---|---|
+| `auto_check_update` | `true` | 启动 4 秒后静默查一次，有新版才出声 |
+| `auto_download_update` | `false` | 发现新版就自动下载（**只是下载**，装不装由你点） |
 
 排序有两个细节：数字列按**数值**排（按字符串排的话 1000ms 会跑到 200ms 前面）；
 取不到值的行**永远沉底**，升降序都不翻转——"没测出延迟"不等于"最慢"，
@@ -548,7 +561,8 @@ python pool.py update            # 下载并生成替换脚本
 | 版本只升不降 + 包内版本号校验 | 降级攻击 / 挂羊头卖狗肉 |
 | `state/` `out/` `bin/` `订阅地址.txt` 不覆盖 | 覆盖掉令牌、节点产物、内核 |
 
-回归：`python state/test_updater.py`（21 项）。
+回归：`python state/test_updater.py`（32 项）、`python state/test-gui-update.py`（23 项）。
+图形入口在控制台的**更新页**，见「桌面控制台」一节。
 
 **客户端（Clash Verge 等）那边不用做任何事** —— 订阅是远程订阅，池子每轮刷新都会
 自动同步过去。
