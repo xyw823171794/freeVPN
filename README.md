@@ -142,6 +142,16 @@ L2 几乎每片都失败。
 
 ## 快速开始
 
+两种拿法，功能完全一样：
+
+| 方式 | 文件 | 说明 |
+|---|---|---|
+| **安装包** | `freeVPN-v1.6.0-setup.exe` | 双击装，默认 `C:\freeVPN`，带开始菜单和卸载条目。**不需要管理员权限**，也**不会覆盖**你已有的 `state/` `out/` |
+| **免安装** | `freeVPN-v1.6.0-win64.zip` | 解压到任意目录，双击 `freeVPN.exe`；整个目录一起拷就行 |
+
+> 仓库里没有 `bin/mihomo.exe`（58 MB 内核）—— **安装包自带**；用 zip 的话从
+> [MetaCubeX/mihomo releases](https://github.com/MetaCubeX/mihomo/releases) 下一个放进 `bin/`。
+
 双击 `start.bat`：起订阅服务 + 每 30 分钟自动重刷池子。
 
 > 想要个窗口界面？双击 **`一键启动.bat`** —— 见下面「桌面控制台」一节。

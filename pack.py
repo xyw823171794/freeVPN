@@ -28,6 +28,7 @@ exe 正好会踩这个坑（Windows 只解压那一个文件）。
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,49 @@ EXCLUDES = [
 def run(cmd: list) -> int:
     print("$ " + " ".join(str(c) for c in cmd))
     return subprocess.call([str(c) for c in cmd], cwd=str(ROOT))
+
+
+# Inno Setup 的编译器。用户级安装(winget 默认)和系统级安装都要能找到。
+ISCC_CANDIDATES = (
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+    Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+)
+
+
+def find_iscc() -> Path | None:
+    return next((p for p in ISCC_CANDIDATES if p.exists()), None)
+
+
+def build_installer() -> Path | None:
+    """用 Inno Setup 生成 Windows 安装包。
+
+    脚本是 installer.iss: 它把 state/ out/ 订阅地址.txt 排除在外(那些是用户的
+    运行数据, 覆盖掉等于让他重新导入订阅), 默认装到 C:\\freeVPN 且**不要**
+    管理员权限。
+    """
+    iscc = find_iscc()
+    if iscc is None:
+        print()
+        print("[!] 没找到 Inno Setup 的 ISCC.exe —— 跳过安装包")
+        print("    装一个:  winget install -e --id JRSoftware.InnoSetup")
+        return None
+    iss = ROOT / "installer.iss"
+    if not iss.exists():
+        print(f"[!] 缺 {iss.name}, 跳过安装包")
+        return None
+    print()
+    print("--- 生成 Windows 安装包 (Inno Setup) ---")
+    rc = run([str(iscc), str(iss), f"/DAppVersion={ver.__version__}"])
+    if rc != 0:
+        print(f"[!] ISCC 退出码 {rc}, 安装包没生成")
+        return None
+    out = DIST / f"{APP}-v{ver.__version__}-setup.exe"
+    if not out.exists():
+        print("[!] ISCC 跑完了但没找到 setup.exe")
+        return None
+    print(f"    {out.name}  ({human(out.stat().st_size)})")
+    return out
 
 
 def human(n: float) -> str:
@@ -157,6 +201,8 @@ def main() -> int:
                     help="出单文件版(一个 exe 走天下, 但每次启动都要往临时目录解压 85MB)")
     ap.add_argument("--onedir", action="store_true",
                     help="出目录版(默认, 启动快; 但必须整个目录一起拷)")
+    ap.add_argument("--installer", action="store_true",
+                    help="顺便用 Inno Setup 生成 Windows 安装包(setup.exe)")
     args = ap.parse_args()
 
     print("=" * 66)
@@ -411,6 +457,9 @@ def main() -> int:
                 z.write(f, str(Path(APP) / rel))
                 n += 1
         print(f"    压缩   {zpath.name}  ({human(zpath.stat().st_size)}, {n} 个文件)")
+
+    if args.installer:
+        build_installer()
 
     print()
     print("=" * 66)

@@ -23,6 +23,20 @@
 **仍然只下载、不自动执行** —— 下完弹窗告诉你关掉程序、双击 `apply-update.bat`。
 Windows 上程序没法覆盖正在运行的自己，而且「下载即执行」本来就是最糟的更新设计。
 
+### Windows 安装包
+
+Release 里除了免安装 zip，多了一个 `freeVPN-v1.6.0-setup.exe`（Inno Setup 生成，25.3 MB）：
+
+- 默认装到 `C:\freeVPN`，**不需要管理员权限** —— 别为了提权而提权
+- **不覆盖** `state/` `out/` `订阅地址.txt`：那是用户的订阅令牌和节点产物，
+  覆盖掉等于让他重新导入一遍
+- 自带 `bin/mihomo.exe`（58 MB 内核），省得用户自己下
+- 开始菜单 + 可选桌面快捷方式，注册表里有卸载条目
+
+源码在 `installer.iss`（**带 UTF-8 BOM** —— `Excludes` 里有中文文件名，无 BOM 时
+Inno 可能按系统代码页读、中文变乱码、排除规则失效）。`python pack.py --zip --installer`
+一键出包；没装 Inno Setup 时会跳过并提示 `winget install -e --id JRSoftware.InnoSetup`。
+
 ### 踩到的两个坑
 
 **跨线程回调不能用 `root.after`。** 第一版从工作线程直接调
