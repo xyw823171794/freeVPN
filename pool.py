@@ -56,6 +56,8 @@ if str(_HERE) not in sys.path:
 # 同目录安全模块: 输入隔离 / 节点审计 / 进程隔离 / 访问控制 / 分流规则
 import security as sec  # noqa: E402
 import version as ver  # noqa: E402
+# 在线更新: 从项目的 GitHub 仓库拉最新版本(只下载, 不自动执行)
+import updater  # noqa: E402
 
 # 打包成 exe 后 __file__ 指向临时解包目录, 所以根目录要问 security 要
 ROOT = sec.app_root()
@@ -3646,6 +3648,10 @@ def main():
                    help="写完之后顺便重启 Clash Verge —— 它只在启动时读配置, "
                         "正在运行时新订阅要重启才看得到")
 
+    up = sub.add_parser("update", help="从 GitHub 拉最新版本(只下载, 不自动执行)")
+    up.add_argument("--check", action="store_true", help="只检查有没有新版本")
+    up.add_argument("--force", action="store_true", help="版本相同也重新下载")
+
     d = sub.add_parser("daemon", help="常驻: 定时刷新 + 服务")
     d.add_argument("--port", type=int, default=8787)
     d.add_argument("--interval", type=int, default=30, help="完整扫描间隔(分钟)")
@@ -3736,6 +3742,9 @@ def main():
 
     if args.cmd == "import":
         raise SystemExit(cmd_import(args))
+
+    if args.cmd == "update":
+        raise SystemExit(updater.run(check_only=args.check, force=args.force))
 
     if args.cmd == "daemon":
         # 中文提示一律由 Python 打印 —— .bat 必须是纯 ASCII, 否则 cmd.exe

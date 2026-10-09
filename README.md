@@ -1,6 +1,6 @@
 # freeVPN (freeVPN)
 
-> 当前版本 **v1.4.0**（见 `version.py` 与 `CHANGELOG.md`）
+> 当前版本 **v1.5.0**（见 `version.py` 与 `CHANGELOG.md`）
 
 把公开免费订阅源聚合成**一个**节点池：自动去重、双层真实测活、安全审计、按地区分组，
 对外给一个本地订阅地址。客户端填一次，之后池子自己刷新，你只挑节点。
@@ -126,6 +126,7 @@ python state/test_service.py     # 访问控制 16 项
 python state/test_naming.py      # 节点名/分组名冲突
 python state/test_cn_rules.py    # 国内分流: 数据文件 + 规则语义 + 内核真实裁决 + fake-ip 场景 (60 项)
 python state/test-l1-udp.py      # L1 不能把 QUIC(hysteria/tuic) 节点当死节点筛掉 (22 项)
+python state/test_updater.py     # 在线更新: 版本比较 + zip slip + 受保护文件 (21 项)
 python state/verify.py           # 端到端: 内核加载产物 + 真实 HTTP 出网
 ```
 
@@ -521,6 +522,36 @@ python security.py                    # 安全模块自检 (7 个探针)
   仍会被 `cn_resolve` 那条兜住，得同时把 `cn_resolve` 设成 `false`，再在客户端侧覆写。
 - 更新 IP 段：`python state/gen-cn-rules.py`（`--apnic <本地文件>` 可离线跑）。
   域名清单不依赖它，两者互不影响。
+
+## 在线更新
+
+```bash
+python pool.py update --check    # 只看有没有新版
+python pool.py update            # 下载并生成替换脚本
+```
+
+流程：读远端版本（优先 GitHub Release，没有 release 就回退到 `main` 分支的
+`version.py`）→ 只升不降地比版本 → 下载 zip → **校验包内版本号与远端一致** →
+解压到 `state/update/<版本>/` → 生成 `state/update/apply-update.bat`。
+然后你关掉程序、双击那个 bat，它 robocopy 覆盖程序文件并自动启动新版本。
+`state/` `out/` `bin/` `订阅地址.txt` 都不会被动。
+
+**为什么不自动更新**：Windows 上程序没法覆盖正在运行的自己；而且「下载即执行」本身
+就是最糟的更新设计。**更新通道本身是攻击面** —— 一个能被喂恶意包的更新器比不更新
+更危险，所以每条约束都写死：
+
+| 约束 | 挡什么 |
+|---|---|
+| 更新源写死成常量，不接受命令行 URL | 改更新源 = 远程代码执行入口 |
+| 只走 https、体积上限 200MB | 中间人替换 / 内存炸弹 |
+| 解压前逐个成员校验路径 | zip slip（`../`、绝对路径、`C:`）写到程序目录外 |
+| 版本只升不降 + 包内版本号校验 | 降级攻击 / 挂羊头卖狗肉 |
+| `state/` `out/` `bin/` `订阅地址.txt` 不覆盖 | 覆盖掉令牌、节点产物、内核 |
+
+回归：`python state/test_updater.py`（21 项）。
+
+**客户端（Clash Verge 等）那边不用做任何事** —— 订阅是远程订阅，池子每轮刷新都会
+自动同步过去。
 
 ## 排错
 
