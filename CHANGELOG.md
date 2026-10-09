@@ -32,6 +32,9 @@ Release 里除了免安装 zip，多了一个 `freeVPN-v1.6.0-setup.exe`（Inno 
   覆盖掉等于让他重新导入一遍
 - 自带 `bin/mihomo.exe`（58 MB 内核），省得用户自己下
 - 开始菜单 + 可选桌面快捷方式，注册表里有卸载条目
+- **安装界面是简体中文** —— Inno Setup 官方不带中文，用的是社区翻译
+  （`langs/ChineseSimplified.isl`，覆盖 Inno 6.5+ 全部 296 条消息），随仓库走，
+  编译时不依赖网络
 
 源码在 `installer.iss`（**带 UTF-8 BOM** —— `Excludes` 里有中文文件名，无 BOM 时
 Inno 可能按系统代码页读、中文变乱码、排除规则失效）。`python pack.py --zip --installer`

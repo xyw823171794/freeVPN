@@ -42,8 +42,13 @@ UninstallDisplayName={#AppName} {#AppVersion}
 UninstallDisplayIcon={app}\{#AppExe}
 SetupLogging=yes
 
+[Languages]
+; Inno Setup 官方**不带**简体中文。这是社区翻译(kira-96 那份, 覆盖 Inno 6.5+
+; 的全部消息), 放在 langs/ 下随仓库走 —— 编译时不依赖网络。
+Name: "chinesesimplified"; MessagesFile: "langs\ChineseSimplified.isl"
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："
 
 [Files]
 ; state\ out\ 订阅地址.txt 是**用户的运行数据**(订阅令牌、节点产物、内核缓存),
@@ -53,11 +58,11 @@ Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cre
 
 [Icons]
 Name: "{group}\freeVPN"; Filename: "{app}\{#AppExe}"
-Name: "{group}\Uninstall freeVPN"; Filename: "{uninstallexe}"
+Name: "{group}\卸载 freeVPN"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\freeVPN"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch freeVPN"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "立即启动 freeVPN"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 程序运行时生成的 __pycache__ 之类, 卸载时顺手清掉。
