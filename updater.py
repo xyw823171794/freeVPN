@@ -29,9 +29,10 @@ import version as ver
 
 # 更新源。改这里等于换一个信任根, 别做成可配置的。
 #
-# 仓库名里那串 `github.com-` 是创建时把整个 URL 填进"仓库名"框留下的。
-# 在 GitHub 上 Settings → Rename 改成 `freeVPN` 之后, 这一行要跟着改。
-REPO = "xyw823171794/github.com-xyw823171794-freeVPN"
+# 仓库名曾经是 `github.com-xyw823171794-freeVPN` —— 建仓库时把整个 URL
+# 填进了"仓库名"框留下的。在 Settings → Rename 改成 `freeVPN` 之后这里跟着改,
+# 两边必须一致, 否则 update 会去一个不存在的地方拉包。
+REPO = "xyw823171794/freeVPN"
 BRANCH = "main"
 API = f"https://api.github.com/repos/{REPO}"
 RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
