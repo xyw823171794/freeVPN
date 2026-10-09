@@ -33,7 +33,24 @@ python pool.py update            # 下载 + 生成替换脚本
 | 版本只升不降 + 包内版本号校验 | 降级攻击 / 挂羊头卖狗肉 |
 | `state/` `out/` `bin/` `订阅地址.txt` 一律不覆盖 | 覆盖掉令牌、节点产物、内核 |
 
-回归：`state/test_updater.py` 21 项全绿（zip slip 的 5 种变体全部拒绝）。
+回归：`state/test_updater.py` 32 项全绿（zip slip 的 5 种变体全部拒绝）。
+
+**隔离演练抓到的三个坑**（在临时目录里模拟"程序目录 + payload"真跑一遍替换脚本）：
+
+1. **apply 脚本模板里混进了中文** —— `.encode("ascii")` 直接抛异常。「`.bat` 必须纯
+   ASCII」是 README 里专门写过一段的规矩，模板自己先违反了。现在
+   `write_apply_script` 显式校验，混进非 ASCII 立刻报错，不会拖到用户点下去才炸。
+2. **等待退出用的是进程名** —— `tasklist /FI "IMAGENAME eq freeVPN.exe"` 是**全局**
+   匹配：本机还装着一份 `C:\freeVPN` 的常驻服务时，脚本会等一个永远不会退出的进程
+   （演练直接卡死，只能强杀）。改成 `wmic` 取 `ExecutablePath`，只等**本目录**那个 exe。
+   `pack.py` 里为同一个坑写过一整段注释，这里又踩了一遍。
+3. **payload 路径少了一层版本目录** —— 实际布局是 `state/update/<版本>/payload`，
+   脚本却按 `%~dp0payload` 找，robocopy 直接报 16。现在版本目录名在生成时烘进脚本。
+
+另外等待循环里的 `timeout /t 2` 换成了 `ping -n 3 127.0.0.1`：`timeout` 在输入被
+重定向时会直接报错退出（演练环境就是这样）。
+
+演练结果：代码被替换、新文件加入，而 `state/` `out/` `bin/` `订阅地址.txt` 原样保留。
 
 ### 仓库整理：首次推到 GitHub
 

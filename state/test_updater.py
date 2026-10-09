@@ -113,6 +113,53 @@ def main() -> int:
     check("体积上限已设", updater.MAX_PACKAGE_BYTES > 0,
           f"{updater.MAX_PACKAGE_BYTES // 1048576}MB")
 
+    print("\n[5] apply 脚本(.bat 必须纯 ASCII)")
+    check("模板里没有非 ASCII 字符",
+          all(ord(c) < 128 for c in updater.APPLY_BAT),
+          next((f"{c!r} @{i}" for i, c in enumerate(updater.APPLY_BAT) if ord(c) > 127), "纯 ASCII"))
+    stage = WORK / "stage"
+    (stage / "payload").mkdir(parents=True, exist_ok=True)
+    bat = updater.write_apply_script(stage)
+    data = bat.read_bytes()
+    check("脚本生成成功", bat.exists() and len(data) > 0, f"{len(data)} 字节")
+    check("落盘后仍是纯 ASCII", all(b < 128 for b in data))
+    check("换行是 CRLF", b"\r\n" in data)
+    check("脚本里点名了要保留 state/out/bin",
+          all(k in data.decode("ascii") for k in ("state", "out", "bin")))
+    # 这里踩过坑: 第一版用 `tasklist /FI "IMAGENAME eq freeVPN.exe"` 等进程退出,
+    # 那是**全局按名字**匹配 —— 本机还有一份 C:\freeVPN 的常驻服务时, 脚本会
+    # 永远等下去(实测演练直接卡死)。必须按可执行文件路径判断。
+    check("按可执行文件路径判断, 而不是按进程名",
+          "ExecutablePath" in updater.APPLY_BAT
+          and "tasklist /FI" not in updater.APPLY_BAT
+          and r'%DST%\freeVPN.exe' in updater.APPLY_BAT)
+    check("目标目录做了绝对路径规范化(否则和 wmic 的路径对不上)",
+          "%%~fI" in updater.APPLY_BAT)
+    check("等待循环不依赖 stdin(timeout 在重定向下会报错)",
+          "ping -n" in updater.APPLY_BAT and "timeout /t" not in updater.APPLY_BAT)
+    # 实际布局是 state\update\<版本>\payload —— 比脚本低一层。第一版写成
+    # `%~dp0payload`, robocopy 报 16(隔离演练抓到的)。
+    body = data.decode("ascii")
+    check("payload 路径带上了版本目录(比脚本低一层)",
+          "__PAYLOAD__" not in body and r"stage\payload" in body,
+          next((l.strip() for l in body.splitlines() if "SRC=" in l), ""))
+    try:
+        updater.write_apply_script(WORK / "bad name!")
+        check("拒绝含空格/特殊字符的版本目录名", False, "竟然接受了")
+    except ValueError as e:
+        check("拒绝含空格/特殊字符的版本目录名", True, str(e)[:48])
+    # 模板混进中文时, 上面那条 ASCII 断言会先失败; 这里再确认 write_apply_script
+    # 自己也会拦(防止有人把校验删掉后模板又被改脏)
+    try:
+        orig = updater.APPLY_BAT
+        updater.APPLY_BAT = orig + "\necho 中文\n"
+        updater.write_apply_script(stage)
+        check("模板被改脏时 write_apply_script 会拦", False, "竟然写成功了")
+    except ValueError as e:
+        check("模板被改脏时 write_apply_script 会拦", True, str(e)[:52])
+    finally:
+        updater.APPLY_BAT = orig
+
     shutil.rmtree(WORK, ignore_errors=True)
     print("\n" + "=" * 74)
     print(f"  通过 {len(PASS)} / 失败 {len(FAIL)}")
