@@ -1,0 +1,22 @@
+{
+  "_说明": "刷新节奏与扫描参数。命令行参数优先于这里；改完重启 start.bat 生效。",
+  "_排程说明": "interval 与 fast 都对齐时钟刻度：interval=30 落在 :00/:30，fast=5 落在 :00:05:10…，与扫描耗时无关，不会漂移。",
+
+  "port": 8787,
+  "interval": 30,
+  "fast": 5,
+
+  "_分流说明": "国内流量默认直连、永不进免费节点。cn_mode: direct=直连(默认) / reject=直接掐断(连直连都不给) / off=不下发国内规则。cn_resolve: IP 规则是否解析域名后再判定 —— true 能覆盖没列进 cn_domains.txt 的国内长尾域名(代价: 未命中的连接多一次 DNS 查询)，false 只匹配本来就是 IP 的连接。改完重启 start.bat 生效。",
+  "cn_mode": "direct",
+  "cn_resolve": true,
+
+  "l2_workers": 192,
+  "l2_top": 3000,
+  "l2_timeout": 3000,
+  "l2_target": 0,
+  "l2_budget": 600,
+  "per_subnet": 4,
+
+  "timeout": 5.0,
+  "concurrency": 500
+}

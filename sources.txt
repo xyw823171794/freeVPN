@@ -1,0 +1,91 @@
+# freeVPN · 订阅源清单
+# ------------------------------------------------------------------
+# 每行一个 URL, # 开头为注释。改完重跑 pool.py 即可。
+# 格式自动识别: base64 订阅 / 明文链接列表 / Clash YAML / Clash provider YAML
+#
+# 程序会自动尝试直连 + ghfast.top / gh-proxy.com / ghproxy.net 镜像回退,
+# 所以这里写裸 raw 地址就行, 不用手写代理前缀。
+#
+# ==================================================================
+# 本清单是按 **L2 实测可用率** 筛过的, 不是抄来的列表。
+# 方法: 每个源抽样 200 个节点送内核, 真的通过节点发 HTTP 请求,
+#       统计"每 1000 个候选里能捞出几个可用节点"。
+#       脚本: state/check-source-health.py
+#
+# 为什么必须用 L2 而不是 L1(TCP 可达): L1 会被 CDN 假节点骗。
+# 实测有个源 L1 存活率 97%、L2 可用率 0.0% —— Cloudflare 的 IP
+# 永远 TCP 可达, 但根本不是代理。
+#
+# 一轮实测(2026-10-08)的结果: 31 个源里只有 4 个真在干活,
+# 其中 Ruk1ng001 一个贡献了绝大部分可用节点。
+# 18 个源是 0.0%, 它们占了候选总量的七成 —— L1 的时间几乎全花在
+# 探这些注定产出为零的节点上。
+# ==================================================================
+
+# ---------- 核心: 实测可用率最高的四个 ----------
+# Ruk1ng001: L2 可用率 69.5% —— 池子的主要来源, 别删
+https://raw.githubusercontent.com/Ruk1ng001/freeSub/main/clash.yaml
+# ermaozi clash: 15.5%
+https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml
+# zhangkaiitugithub: 16.0%
+https://raw.githubusercontent.com/zhangkaiitugithub/passcro/main/speednodes.yaml
+# sunmiao4458: 16.1% (体量小但质量高)
+https://sunmiao4458.github.io/free-proxy-airport/clash.yaml
+
+# ---------- 次要: 可用率 1-3%, 用来补充覆盖 ----------
+https://raw.githubusercontent.com/free18/v2ray/main/c.yaml
+https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt
+https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.yml
+https://raw.githubusercontent.com/free18/v2ray/main/v.txt
+
+# ---------- 备用源 (实测 0.5% 左右, 默认关闭) ----------
+# 这几个每千候选只有 5 个可用, 开着会明显拖慢 L1 而收益极小。
+# 池子明显不够用时再逐个取消注释试。
+# https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt
+# https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt
+# https://raw.githubusercontent.com/dongchengjie/airport/main/subs/merged/tested_within.yaml
+# https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt
+# https://raw.githubusercontent.com/ts-sf/fly/main/clash
+
+# ==================================================================
+# 以下源实测 **L2 可用率 0.0%** —— 一个可用节点都产不出。
+# 2026-10-08 保留在这里作为记录, 默认全部注释。
+# 它们合计贡献了约 7000 个候选(占总量七成), 但可用节点 0 个。
+# 注意 SoliSpirit 有 9320 个节点、anaer 有 1672 个 —— 体量大不等于有用。
+# ==================================================================
+# --- 0.0% ---
+# https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/all_configs.txt
+# https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml
+# https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix
+# https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub2.txt
+# https://raw.githubusercontent.com/Peasoft/NoMoreWalls/master/list.txt
+# https://raw.githubusercontent.com/Q3dlaXpoaQ/V2rayN_Clash_Node_Getter/main/APIs/sc0.yaml
+# https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/hk/all.txt
+# https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/yudou66.txt
+# https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/blues.txt
+# https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/nodefree.txt
+# https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/clashmeta.txt
+# https://raw.githubusercontent.com/sinspired/airport/main/subs/tssf.yaml
+# https://raw.githubusercontent.com/sinspired/airport/main/subs/blue-Youtube.yaml
+# https://raw.githubusercontent.com/vxiaov/free_proxies/main/clash/clash.provider.yaml
+# https://raw.githubusercontent.com/ripaojiedian/freenode/main/clash
+# https://raw.githubusercontent.com/freefq/free/master/v2
+
+# --- 坏源: 拉不到 / 解析出 0 个节点 ---
+# https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.yml
+# https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/sub
+
+# ==================================================================
+# 关于"找新源"
+# ------------------------------------------------------------------
+# 2026-10-08 用 GitHub API 扫了 15 个仓库、51 个候选文件, 逐个实测:
+#   拉取+解析通过 45/51, 但 **L2 可用率全部低于现有最好的源**。
+#   最好的新源 2.0%, 而现有 Ruk1ng001 是 69.5%。
+#   有两个看着很唬人 —— 7884 个节点、L1 存活率 97% —— 实测 L2 可用率 0.0%:
+#   它们 29% 是 Cloudflare/Fastly 网段, 而且 7884 个条目只覆盖 1912 个服务器
+#   (4.1 倍注水)。
+#
+# 结论: **这个领域没有"更好的新源", 只有"更多重复的旧源"。**
+# 与其扩源, 不如定期跑 state/check-source-health.py 淘汰掉已经死掉的。
+# 免费节点的供给是存量博弈, 不是增量。
+# ==================================================================
