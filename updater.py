@@ -307,6 +307,24 @@ def write_apply_script(stage_root: Path) -> Path:
     return bat
 
 
+def proxy_hint() -> None:
+    """直连 GitHub 不通时的提示。
+
+    国内直连 github.com 经常被掐: 实测 TCP 能连上、TLS/SSH 握手阶段被打断
+    (`Connection was reset` / `kex_exchange_identification` 超时), 而同一时刻
+    走本机代理就正常。urllib 认 HTTPS_PROXY 环境变量, 不用改代码也不用改配置。
+    """
+    cur = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    print()
+    if cur:
+        print(f"    当前 HTTPS_PROXY={cur} —— 如果它本身不通, 换一个再试")
+        return
+    print("    如果直连 GitHub 不稳(国内常见, 表现为 reset / 握手超时), 借本机代理:")
+    print('      PowerShell:  $env:HTTPS_PROXY="http://127.0.0.1:7897"')
+    print('      cmd:         set HTTPS_PROXY=http://127.0.0.1:7897')
+    print("    端口按你代理软件里实际的监听端口改。")
+
+
 def run(check_only: bool = False, force: bool = False, quiet: bool = False) -> int:
     """检查并（可选）下载新版。返回进程退出码。"""
     print(f"[*] 本地版本 {ver.__version__}  ({ver.__release_date__})")
@@ -315,13 +333,13 @@ def run(check_only: bool = False, force: bool = False, quiet: bool = False) -> i
         info = remote_info()
     except Exception as e:
         print(f"[!] 查不到远端版本: {type(e).__name__}: {e}")
-        print("    (仓库还没有 release 也没关系 —— 会回退到 main 分支)")
+        proxy_hint()
         return 2
 
     rv = info.get("version") or ""
     if not rv:
-        print("[!] 远端没有可识别的版本号。")
-        print("    仓库建好后至少要有一个 release/tag, 或者 main 分支上有 version.py。")
+        print("[!] 远端没有可识别的版本号 —— 网络不通, 或者仓库确实还没有 release/tag。")
+        proxy_hint()
         return 2
 
     kind = {"release": "GitHub Release(含打包的 exe)",
