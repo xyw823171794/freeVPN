@@ -1200,11 +1200,14 @@ class PoolGUI:
                     for line in tail:
                         self.logq_put("   " + line)
                     msg = "\n".join(tail[-8:]) or "（日志是空的）"
-                    joined = "\n".join(tail)
-                    port_busy = ("已被占用" in joined) or ("WinError 10048" in joined)
+                    # 是不是"端口被占"导致的失败 —— **直接查端口状态**, 别 grep 日志。
+                    # grep 是间接推断, 会误判: daemon 失败的原因有好几种(端口冲突、
+                    # 权限、配置被拒), 而日志里只要出现过"已被占用"就一律当成冲突,
+                    # 用户就被引去清一个根本没被占的端口(实测踩过)。
+                    busy = port_listening(self.port)
 
                     def report():
-                        if port_busy:
+                        if busy:
                             holders = self.port_holders()
                             who = "\n".join(
                                 f"  {h['name']}  (PID {h['pid']})"
@@ -1215,7 +1218,7 @@ class PoolGUI:
                                 "   最后一列是 PID）")
                             if messagebox.askyesno(
                                     "端口被占用",
-                                    f"常驻起不来：端口 {self.port} 被这些进程占着。\n\n"
+                                    f"常驻起不来：端口 {self.port} 确实有东西在监听。\n\n"
                                     f"{who}\n\n"
                                     "要结束它们、然后重新启动常驻吗？\n"
                                     "（只动这个端口上的进程，不会影响别的东西）"):
@@ -1228,7 +1231,8 @@ class PoolGUI:
                             return
                         messagebox.showerror(
                             "常驻启动失败",
-                            f"退出码 {rc}\n\n{msg}\n\n完整日志: {logpath}")
+                            f"退出码 {rc}\n\n{msg}\n\n完整日志: {logpath}\n\n"
+                            f"（端口 {self.port} 是空的, 所以不是端口冲突 —— 看上面的日志）")
 
                     self.root.after(0, report)
                     self.root.after(200, self.refresh)

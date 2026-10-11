@@ -101,6 +101,17 @@ def main() -> int:
               "upd_check" in str(app.btn_upd_dl.cget("command")) or True)
         check("updater.REPO 指向本项目仓库",
               updater.REPO == "xyw823171794/freeVPN", updater.REPO)
+
+        print("\n[6] 端口冲突的判定方式")
+        # 曾经用 grep daemon.log 里有没有"已被占用"来判断 —— 间接推断, 会误判:
+        # 失败原因有好几种, 而日志里出现过那句话就一律当成端口冲突, 用户就被
+        # 引去清一个根本没被占的端口。现在直接查端口状态。
+        import inspect
+        src = inspect.getsource(gui.PoolGUI.watch_daemon)
+        check("用实际端口状态判定, 不再 grep 日志",
+              "port_listening" in src and "已被占用\" in" not in src)
+        check("端口空着时不再谎报端口冲突",
+              "不是端口冲突" in src)
     finally:
         root.destroy()
         if orig is not None:
