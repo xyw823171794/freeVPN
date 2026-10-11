@@ -75,19 +75,33 @@ def is_newer(remote: str, local: str = None) -> bool:
 # --------------------------------------------------------------------------
 # 取远端信息
 # --------------------------------------------------------------------------
-# 本机常见代理端口。国内直连 GitHub 经常被掐(TCP 能连、TLS 握手被打断), 而
-# 同一时刻走本机代理正常。双击运行的 exe 没有 HTTPS_PROXY 环境变量, 所以直连
-# 失败时自动借一下本机代理 —— 只连回环, 不做任何外部探测。
-PROXY_CANDIDATES = ("http://127.0.0.1:7897", "http://127.0.0.1:7890",
-                    "http://127.0.0.1:10809", "http://127.0.0.1:10808",
-                    "http://127.0.0.1:2080", "http://127.0.0.1:1080")
+# 本机常见**HTTP**代理端口。
+#
+# 别把 SOCKS 端口放进来: urllib 走不了 SOCKS(要 PySocks), 放进来只会白等一次
+# 超时, 还打印一句让人困惑的"走不通" —— 实测 v2rayN 的 10808 就是 SOCKS,
+# 被误当成 HTTP 代理试过(用户直接看到了那行提示)。
+PROXY_CANDIDATES = ("http://127.0.0.1:7897",    # Clash Verge / mihomo 的 mixed
+                    "http://127.0.0.1:7890",    # Clash 默认 mixed
+                    "http://127.0.0.1:10809",   # v2rayN 的 HTTP
+                    "http://127.0.0.1:2080",    # v2rayN 旧版 HTTP
+                    "http://127.0.0.1:8888",    # 通用
+                    )
+
+# 探测结果缓存。检查更新和下载各会问一次 local_proxy(), 不缓存就会重复探测、
+# 重复打印同一句"走不通"。
+_PROXY_CACHE: list = []          # [] = 没探过; [None] = 探过没有; [p] = 探到 p
+_PROXY_WARNED: set = set()       # 已经提示过"走不通"的代理, 别刷屏
 
 
 def local_proxy() -> str | None:
-    """本机开着的常见代理端口(毫秒级探测, 不通就跳过)。"""
+    """本机开着的常见 HTTP 代理端口(毫秒级探测, 不通就跳过)。"""
+    if _PROXY_CACHE:
+        return _PROXY_CACHE[0]
     env = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
     if env:
+        _PROXY_CACHE.append(env)
         return env            # 用户显式指定了, 优先用
+    found = None
     for p in PROXY_CANDIDATES:
         try:
             port = int(p.rsplit(":", 1)[1])
@@ -95,10 +109,20 @@ def local_proxy() -> str | None:
             continue
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.3):
-                return p
+                found = p
+                break
         except OSError:
             continue
-    return None
+    _PROXY_CACHE.append(found)
+    return found
+
+
+def warn_proxy_once(proxy: str, exc: Exception) -> None:
+    """代理走不通时提示一句 —— 同一个代理只提示一次。"""
+    if proxy in _PROXY_WARNED:
+        return
+    _PROXY_WARNED.add(proxy)
+    print(f"[*] 本机代理 {proxy} 走不通({type(exc).__name__}), 改直连")
 
 
 def _open_via(proxy: str, req, timeout: int):
@@ -120,7 +144,7 @@ def _get(url: str, timeout: int = API_TIMEOUT) -> bytes:
         except urllib.error.HTTPError:
             raise          # 服务器有响应 —— 网络是通的, 换路没意义
         except Exception as e:
-            print(f"[*] 本机代理 {p} 走不通({type(e).__name__}), 改直连")
+            warn_proxy_once(p, e)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -247,7 +271,7 @@ def download(url: str, dest: Path, quiet: bool = False, on_progress=None) -> Pat
     except Exception as e:
         if not p:
             raise
-        print(f"[*] 本机代理 {p} 走不通({type(e).__name__}), 改直连")
+        warn_proxy_once(p, e)
         resp = urllib.request.urlopen(req, timeout=TIMEOUT)
 
     # 206 = 服务器接受了 Range, 可以接着写; 200 = 不支持, 从头来

@@ -206,6 +206,17 @@ def main() -> int:
         updater._get_json, updater._exists, updater._version_from_raw = orig
 
     shutil.rmtree(WORK, ignore_errors=True)
+    print("\n[7] 代理探测")
+    # 踩过的坑: 候选列表里放了 v2rayN 的 10808 —— 那是 SOCKS, urllib 走不了,
+    # 于是每次更新都白等一次超时并打印一句让用户困惑的"走不通"。
+    check("候选里没有 SOCKS 端口(10808 / 1080)",
+          not any("10808" in p or p.endswith(":1080")
+                  for p in updater.PROXY_CANDIDATES),
+          str([p.rsplit(":", 1)[1] for p in updater.PROXY_CANDIDATES]))
+    check("探测结果有缓存(检查+下载不会各探一次)", isinstance(updater._PROXY_CACHE, list))
+    check("提示去重函数在", callable(updater.warn_proxy_once))
+    check("同一代理只提示一次", isinstance(updater._PROXY_WARNED, set))
+
     print("\n" + "=" * 74)
     print(f"  通过 {len(PASS)} / 失败 {len(FAIL)}")
     for f in FAIL:
