@@ -3687,6 +3687,8 @@ def main():
     up = sub.add_parser("update", help="从 GitHub 拉最新版本(只下载, 不自动执行)")
     up.add_argument("--check", action="store_true", help="只检查有没有新版本")
     up.add_argument("--force", action="store_true", help="版本相同也重新下载")
+    up.add_argument("--apply", action="store_true",
+                    help="下完直接替换并重启(傻瓜式: 本程序退出, 脚本接手换文件+拉起新版本)")
 
     d = sub.add_parser("daemon", help="常驻: 定时刷新 + 服务")
     d.add_argument("--port", type=int, default=8787)
@@ -3780,7 +3782,8 @@ def main():
         raise SystemExit(cmd_import(args))
 
     if args.cmd == "update":
-        raise SystemExit(updater.run(check_only=args.check, force=args.force))
+        raise SystemExit(updater.run(check_only=args.check, force=args.force,
+                                     apply_now=args.apply))
 
     if args.cmd == "daemon":
         # 中文提示一律由 Python 打印 —— .bat 必须是纯 ASCII, 否则 cmd.exe

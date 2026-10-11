@@ -419,6 +419,8 @@ class PoolGUI:
         conf = load_json(CONF) or {}
         self._upd_busy = False
         self._upd_info: dict | None = None
+        # 点了"一键更新"但还没下载 → 下完自动接着走替换
+        self._upd_apply_after_download = False
 
         box = ttk.LabelFrame(parent, text=" 版本 ", padding=12)
         box.pack(fill="x")
@@ -448,9 +450,13 @@ class PoolGUI:
 
         act = ttk.Frame(parent)
         act.pack(fill="x", pady=(14, 0))
-        self.btn_upd_dl = ttk.Button(act, text="下载并准备更新", style="Accent.TButton",
-                                     command=self.upd_download, state="disabled")
-        self.btn_upd_dl.pack(side="left")
+        self.btn_upd_apply = ttk.Button(act, text="一键更新并重启",
+                                        style="Accent.TButton",
+                                        command=self.upd_apply, state="disabled")
+        self.btn_upd_apply.pack(side="left")
+        self.btn_upd_dl = ttk.Button(act, text="只下载", command=self.upd_download,
+                                     state="disabled")
+        self.btn_upd_dl.pack(side="left", padx=(8, 0))
         ttk.Button(act, text="打开更新目录", command=self.upd_open_dir) \
             .pack(side="left", padx=(8, 0))
         ttk.Button(act, text="看仓库", command=self.upd_open_repo) \
@@ -479,6 +485,7 @@ class PoolGUI:
             return
         self._upd_busy = True
         self.btn_upd_dl.config(state="disabled")
+        self.btn_upd_apply.config(state="disabled")
         self.pb_upd.config(value=0)
         self.upd_set_state("正在检查 GitHub …", BLUE)
         threading.Thread(target=self._upd_check_worker, args=(silent,),
@@ -526,6 +533,7 @@ class PoolGUI:
 
         self.upd_set_state(f"发现新版本 v{rv}", GREEN)
         self.btn_upd_dl.config(state="normal")
+        self.btn_upd_apply.config(state="normal")
         self.say(f"[更新] 发现新版本 v{rv}（{kind}）")
         notes = (info.get("notes") or "").strip()
         body = [f"v{ver.__version__}  →  v{rv}", f"来源: {kind}"]
@@ -541,6 +549,50 @@ class PoolGUI:
             self.say("[更新] 已开启自动下载，开始下载 …")
             self.upd_download()
 
+    def upd_apply(self):
+        """一键更新并重启。
+
+        Windows 上程序没法覆盖正在运行的自己, 所以这条路是: 下载 → 启动一个
+        **分离的**替换脚本 → 本程序立刻退出 → 脚本等进程退出后覆盖文件, 再把
+        新版本拉起来。用户看到的就是"程序自己关了又开了"。
+        """
+        if self._upd_busy or not self._upd_info:
+            return
+        rv = self._upd_info.get("version") or ""
+        if not rv:
+            return
+        stage = updater.update_dir() / rv
+        if (stage / "payload").exists():
+            # 已经下过了 —— 重新生成一次脚本, 保证里面烘的版本目录名是对的
+            self._upd_launch(updater.write_apply_script(stage), rv)
+        else:
+            self._upd_apply_after_download = True
+            self.upd_download()
+
+    def _upd_launch(self, bat, rv: str):
+        if not messagebox.askyesno(
+                "一键更新并重启",
+                f"把 freeVPN 更新到 v{rv}。\n\n"
+                "程序会自己关掉，几秒钟后自动打开新版本。\n"
+                "state\\ out\\ bin\\ 订阅地址.txt 都不会被动。\n\n"
+                "现在开始吗？"):
+            self._upd_apply_after_download = False
+            return
+        if updater.launch_apply(bat):
+            self.say(f"[更新] 已交给替换脚本，本程序即将退出并自动重启到 v{rv}")
+            try:
+                self._gui_log.flush()
+            except Exception:
+                pass
+            self.root.destroy()
+            # 立刻退出, 不走清理 —— 文件必须马上被释放, 否则脚本的 robocopy
+            # 会撞上"正在使用中"。日志上面已经 flush 过了。
+            os._exit(0)
+        else:
+            self._upd_apply_after_download = False
+            messagebox.showerror("启动失败",
+                                 f"没能启动替换脚本，请手动双击：\n{bat}")
+
     def upd_download(self):
         if self._upd_busy or not self._upd_info:
             return
@@ -549,6 +601,7 @@ class PoolGUI:
             return
         self._upd_busy = True
         self.btn_upd_dl.config(state="disabled")
+        self.btn_upd_apply.config(state="disabled")
         self.pb_upd.config(value=0)
         self.upd_set_state(f"正在下载 v{rv} …", BLUE)
         threading.Thread(target=self._upd_dl_worker,
@@ -590,10 +643,17 @@ class PoolGUI:
         if err is not None:
             self.upd_set_state(f"下载失败：{type(err).__name__}", RED)
             self.btn_upd_dl.config(state="normal")
+            self.btn_upd_apply.config(state="normal")
+            self._upd_apply_after_download = False
             self.say(f"[!] 下载更新失败: {type(err).__name__}: {err}")
             messagebox.showerror("下载失败", f"{err}\n\n{proxy_tip()}")
             return
         self.pb_upd.config(value=100)
+        # 点的是"一键更新并重启" → 下完直接接着走替换, 不再多问一遍
+        if self._upd_apply_after_download:
+            self._upd_apply_after_download = False
+            self._upd_launch(bat, rv)
+            return
         self.upd_set_state(f"v{rv} 已就绪 —— 关掉本程序后双击 {bat.name}", GREEN)
         self.say(f"[更新] v{rv} 已下载并解压（{n} 个文件）")
         self.say(f"[更新] 关掉 freeVPN 后双击: {bat}")

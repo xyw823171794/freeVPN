@@ -137,6 +137,13 @@ def main() -> int:
           "%%~fI" in updater.APPLY_BAT)
     check("等待循环不依赖 stdin(timeout 在重定向下会报错)",
           "ping -n" in updater.APPLY_BAT and "timeout /t" not in updater.APPLY_BAT)
+    # 静默更新: 脚本由程序分离启动, 不该有 pause 等人按键 —— 那样会在后台
+    # 永远挂着, 用户还以为"点了没反应"。
+    check("脚本里没有 pause(静默, 不等人按键)",
+          "pause" not in updater.APPLY_BAT.lower())
+    check("脚本会把过程写进 apply.log", "apply.log" in updater.APPLY_BAT)
+    check("脚本最后会拉起新版本", "start \"\"" in updater.APPLY_BAT)
+    check("有分离启动替换脚本的入口", callable(updater.launch_apply))
     # 实际布局是 state\update\<版本>\payload —— 比脚本低一层。第一版写成
     # `%~dp0payload`, robocopy 报 16(隔离演练抓到的)。
     body = data.decode("ascii")

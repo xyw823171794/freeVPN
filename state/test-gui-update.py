@@ -54,13 +54,15 @@ def main() -> int:
     try:
         print("\n[1] 控件与初始状态")
         for attr in ("lb_upd_state", "lb_upd_remote", "pb_upd", "btn_upd_dl",
-                     "txt_upd", "var_upd_autocheck", "var_upd_autodl"):
+                     "btn_upd_apply", "txt_upd", "var_upd_autocheck", "var_upd_autodl"):
             check(f"有 {attr}", hasattr(app, attr))
         check("初始状态是「还没检查过」",
               "还没检查过" in app.lb_upd_state.cget("text"))
         check("远端版本初始为 —", "—" in app.lb_upd_remote.cget("text"))
         check("下载按钮初始禁用",
               str(app.btn_upd_dl.cget("state")) == "disabled")
+        check("一键更新按钮初始禁用",
+              str(app.btn_upd_apply.cget("state")) == "disabled")
         check("默认勾选「启动时自动检查」", bool(app.var_upd_autocheck.get()))
         check("默认不勾「自动下载」", not bool(app.var_upd_autodl.get()))
         check("文本区初始写了更新源", updater.REPO in app.txt_upd.get("1.0", "end"))

@@ -1,6 +1,6 @@
 # freeVPN (freeVPN)
 
-> 当前版本 **v1.6.2**（见 `version.py` 与 `CHANGELOG.md`）
+> 当前版本 **v1.6.3**（见 `version.py` 与 `CHANGELOG.md`）
 
 把公开免费订阅源聚合成**一个**节点池：自动去重、双层真实测活、安全审计、按地区分组，
 对外给一个本地订阅地址。客户端填一次，之后池子自己刷新，你只挑节点。
@@ -224,8 +224,9 @@ python pool.py gui
 | 订阅地址 | 输入框 + 复制按钮 |
 
 **更新页**就是「在线更新」那套的图形入口：点「检查更新」看有没有新版，有就点
-「下载并准备更新」——下完弹窗告诉你关掉程序、双击 `apply-update.bat` 完成替换
-（程序没法覆盖正在运行的自己，这一步必须你点）。
+**「一键更新并重启」**——程序会自己关掉，几秒钟后自动打开新版本（Windows 上程序
+没法覆盖正在运行的自己，所以是"自己退出 + 分离脚本接手"）。想手动控制的话点
+「只下载」，然后自己关掉程序双击 `apply-update.bat`。
 
 两个开关写在 `pool.conf.json` 里：
 
@@ -551,7 +552,8 @@ python security.py                    # 安全模块自检 (7 个探针)
 
 ```bash
 python pool.py update --check    # 只看有没有新版
-python pool.py update            # 下载并生成替换脚本
+python pool.py update --apply    # 一键: 下完自己退出, 脚本接手换文件 + 重启
+python pool.py update            # 手动那条路: 只下载, 生成替换脚本给你双击
 ```
 
 流程：读远端版本（优先 GitHub Release，没有 release 就回退到 `main` 分支的
