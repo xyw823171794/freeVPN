@@ -38,6 +38,10 @@ BRANCH = "main"
 API = f"https://api.github.com/repos/{REPO}"
 RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 SRC_ZIP = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
+# Release 附件的**固定下载路径** —— 不需要 API, 知道 tag 和文件名就能下。
+# 这条路径是绕开 API 限流的关键, 见 remote_info() 的说明。
+DL = f"https://github.com/{REPO}/releases/download"
+APP_NAME = "freeVPN"
 
 UA = f"freeVPN-updater/{ver.__version__}"
 TIMEOUT = 30          # 下载用: urlopen 的 timeout 是单次读超时, 大包要留够
@@ -130,12 +134,49 @@ def _get_json(url: str):
         return None
 
 
+def _version_from_raw() -> str:
+    """从 main 分支的 version.py 读版本号。
+
+    只下几 KB, 而且**不受 API 限流影响** —— 匿名 API 是 60 次/小时, 在国内
+    共享出口 IP 上极容易打满。
+    """
+    try:
+        txt = _get(f"{RAW}/version.py", timeout=API_TIMEOUT).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', txt)
+    return m.group(1) if m else ""
+
+
+def _exists(url: str) -> bool:
+    """HEAD 探测远端文件在不在(release 下载链接支持 HEAD, 不用下整包)。"""
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
+        p = local_proxy()
+        if p:
+            with _open_via(p, req, API_TIMEOUT):
+                return True
+        with urllib.request.urlopen(req, timeout=API_TIMEOUT):
+            return True
+    except Exception:
+        return False
+
+
 def remote_info() -> dict:
     """远端最新版本。
 
-    两条通道, 按可靠性排:
-      ① GitHub Release —— 能拿到**打包好的 win64 zip**(带 exe), 是首选
-      ② main 分支 —— 仓库还没发 release 时的回退, 只能拿源码 zip
+    三条通道, 按可靠性排:
+
+      ① **GitHub Release API** —— 能同时拿到附件列表和更新说明, 首选。
+      ② **main 的 version.py + 拼固定下载 URL** —— API 不可用时的主力。
+         GitHub 的 release 附件路径是固定的:
+             https://github.com/<repo>/releases/download/<tag>/<file>
+         知道 tag 和文件名就能下, **不需要 API**。
+         这一步很关键: 匿名 API 限流(60 次/小时)在国内共享出口 IP 上极常见,
+         如果这时只会回退到"源码 zip", exe 用户就拿不到带 exe 的包 —— 实测踩过
+         (Release 明明发了, 界面却显示"来源: main 分支源码")。
+      ③ **源码 zip** —— 连附件都没有时兜底。
+
     返回 {version, kind, url, notes, size} —— 拿不到就 version 为空。
     """
     rel = _get_json(f"{API}/releases/latest")
@@ -158,16 +199,19 @@ def remote_info() -> dict:
             "published": rel.get("published_at") or "",
         }
 
-    # 回退: 直接读 main 分支的 version.py —— 只下几 KB, 比拉整包再比版本划算
-    try:
-        txt = _get(f"{RAW}/version.py", timeout=API_TIMEOUT).decode("utf-8", "replace")
-    except Exception:
-        txt = ""
-    m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', txt)
-    if not m:
+    # ② API 不可用(限流/被墙) —— 拿版本号, 拼 Release 的固定下载 URL
+    ver = _version_from_raw()
+    if not ver:
         return {"version": "", "kind": "none", "url": "", "size": 0, "notes": "",
                 "published": ""}
-    return {"version": m.group(1), "tag": "", "kind": "source",
+    tag = f"v{ver}"
+    for name in (f"{APP_NAME}-{tag}-win64.zip", f"{APP_NAME}-{ver}-win64.zip"):
+        url = f"{DL}/{tag}/{name}"
+        if _exists(url):
+            return {"version": ver, "tag": tag, "kind": "release",
+                    "url": url, "size": 0, "notes": "", "published": ""}
+    # ③ 连附件都没探测到 —— 源码包兜底
+    return {"version": ver, "tag": tag, "kind": "source",
             "url": SRC_ZIP, "size": 0, "notes": "", "published": ""}
 
 

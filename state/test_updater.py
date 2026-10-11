@@ -160,6 +160,32 @@ def main() -> int:
     finally:
         updater.APPLY_BAT = orig
 
+    print("\n[6] API 限流时的回退(不能只给源码包)")
+    # 背景: 匿名 GitHub API 是 60 次/小时, 在国内共享出口 IP 上极容易打满。
+    # 实测踩过 —— Release 明明发了, 界面却显示「来源: main 分支源码」, exe 用户
+    # 下到的包里没有 exe。修法是绕开 API: 用 version.py 拿版本号, 再拼
+    # releases/download/<tag>/<file> 这个**固定路径**。
+    # 这里全程离线(mock 掉网络函数), 免得网络抖动让测试假失败。
+    orig = (updater._get_json, updater._exists, updater._version_from_raw)
+    try:
+        updater._get_json = lambda url: None              # 模拟 403 rate limit
+        updater._version_from_raw = lambda: "9.9.9"       # 模拟从 main 读到版本
+
+        updater._exists = lambda url: True                # 附件存在
+        i = updater.remote_info()
+        check("API 挂掉时仍认得出是 Release 包", i["kind"] == "release", i["kind"])
+        check("URL 指向 releases/download 而不是 archive",
+              "releases/download" in i["url"], i["url"])
+        check("URL 里带 tag 和文件名",
+              "/v9.9.9/" in i["url"] and i["url"].endswith(".zip"), i["url"])
+
+        updater._exists = lambda url: False               # 附件确实不存在
+        i2 = updater.remote_info()
+        check("附件真不存在时才回退源码包", i2["kind"] == "source", i2["kind"])
+        check("回退源码包时版本号仍然对", i2["version"] == "9.9.9", i2["version"])
+    finally:
+        updater._get_json, updater._exists, updater._version_from_raw = orig
+
     shutil.rmtree(WORK, ignore_errors=True)
     print("\n" + "=" * 74)
     print(f"  通过 {len(PASS)} / 失败 {len(FAIL)}")

@@ -4,6 +4,41 @@
 
 ---
 
+## v1.6.2 — 2026-10-11
+
+### 修：发了 Release 却只拿到源码包
+
+**现象**：v1.6.1 的 Release 明明发了（两个附件都在），生产实例的 `update --check`
+却显示：
+
+```
+[*] 远端版本 1.6.1  来源: main 分支源码
+```
+
+exe 用户拿到的源码包里**没有 exe**，更新等于没做。
+
+**根因**：`remote_info()` 只认 GitHub API 的 `/releases/latest`。而匿名 API 是
+**60 次/小时**，在国内共享出口 IP 上极容易打满 —— 实测直连和走代理都回 403
+`rate limit exceeded`，于是直接回退到 main 分支的源码包。
+
+**修法**：加一条**绕开 API** 的路。GitHub 的 Release 附件下载路径是固定的：
+
+```
+https://github.com/<repo>/releases/download/<tag>/<file>
+```
+
+知道 tag 和文件名就能下，不需要 API。版本号从 main 的 `version.py` 拿（几 KB，
+不受限流影响），再按项目命名规则拼出附件 URL 并 HEAD 探测一次：
+
+1. API 可用 → 用 API（能同时拿到附件列表和更新说明）
+2. API 不可用 → 拿版本号 + 拼固定 URL + HEAD 探测 → **仍然是 Release 包**
+3. 附件真不存在 → 才回退源码包
+
+回归：`state/test_updater.py` 37 项（新增 5 项**全程离线** —— mock 掉网络函数，
+免得网络抖动让测试假失败）。
+
+---
+
 ## v1.6.1 — 2026-10-11
 
 ### 修「端口被占用」和「端口空闲」同时出现
