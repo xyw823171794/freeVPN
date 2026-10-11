@@ -3225,74 +3225,110 @@ class PoolServer(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def _port_pids_netstat(port: int) -> list[int]:
+    """netstat 路线。拿不到就返回空, 由调用方试下一条路。"""
+    pids: list[int] = []
+    r = subprocess.run(
+        ["netstat", "-ano", "-p", "TCP"],
+        capture_output=True, text=True, timeout=15,
+        encoding=sec.console_encoding(), errors="replace",
+        creationflags=sec.hidden_flags())
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        # 形如:  TCP  127.0.0.1:8787  0.0.0.0:0  LISTENING  1480
+        # 端口必须**精确**比对。原来写的是 `f":{port}" in parts[1]`,
+        # 那是子串匹配 —— port_holders(878) 会命中 8787,
+        # port_holders(80) 会命中 8080, 而 port_holders(1) 会命中任何
+        # 地址里含 ":1" 的监听者(实测命中 services.exe 和 System)。
+        # 配上 free_port 的 kill, 那就是"结束任意进程"的原语。
+        if len(parts) < 5 or parts[3] != "LISTENING":
+            continue
+        addr = parts[1]
+        _host, sep, tail = addr.rpartition(":")
+        if not sep or not tail.isdigit():
+            continue
+        if int(tail) != port:
+            continue
+        if parts[4].isdigit() and int(parts[4]) not in pids:
+            pids.append(int(parts[4]))
+    return pids
+
+
+def _port_pids_powershell(port: int) -> list[int]:
+    """Get-NetTCPConnection 路线 —— netstat 拿不到时的回退。
+
+    为什么需要: netstat 会被安全软件拦、也可能输出格式不标准(不同语言/版本)。
+    而这条链路正好是 GUI 的"点了没反应"重灾区 —— 查不到占用者时界面只能写
+    "可能刚好释放了", 用户完全不知道该干嘛。
+    """
+    ps = (f"Get-NetTCPConnection -LocalPort {int(port)} -State Listen "
+          f"-ErrorAction SilentlyContinue | "
+          f"Select-Object -ExpandProperty OwningProcess")
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, text=True, timeout=25,
+        encoding=sec.console_encoding(), errors="replace",
+        creationflags=sec.hidden_flags())
+    out = []
+    for tok in (r.stdout or "").split():
+        if tok.strip().isdigit() and int(tok) not in out:
+            out.append(int(tok))
+    return out
+
+
 def port_holders(port: int) -> list[dict]:
     """列出占着这个端口的进程: [{pid, name, cmdline, is_freevpn}]。
 
     控制台要能"一键清掉占用者", 所以这里返回结构化数据, 不只是给人看的文字。
+
+    两条路取并集: netstat 和 Get-NetTCPConnection 各有各的失效场景(安全软件
+    拦截、输出格式差异), 单靠一条会让界面在"端口确实被占"时显示"查不到占用者"。
     """
+    pids: list[int] = []
+    for finder in (_port_pids_netstat, _port_pids_powershell):
+        try:
+            for pid in finder(port):
+                if pid not in pids:
+                    pids.append(pid)
+        except Exception:
+            continue          # 这条路不行就换下一条, 别把整件事吞掉
+
     out: list[dict] = []
-    try:
-        r = subprocess.run(
-            ["netstat", "-ano", "-p", "TCP"],
-            capture_output=True, text=True, timeout=15,
-            encoding=sec.console_encoding(), errors="replace",
-            creationflags=sec.hidden_flags())
-        pids = []
-        for line in (r.stdout or "").splitlines():
-            parts = line.split()
-            # 形如:  TCP  127.0.0.1:8787  0.0.0.0:0  LISTENING  1480
-            # 端口必须**精确**比对。原来写的是 `f":{port}" in parts[1]`,
-            # 那是子串匹配 —— port_holders(878) 会命中 8787,
-            # port_holders(80) 会命中 8080, 而 port_holders(1) 会命中任何
-            # 地址里含 ":1" 的监听者(实测命中 services.exe 和 System)。
-            # 配上 free_port 的 kill, 那就是"结束任意进程"的原语。
-            if len(parts) < 5 or parts[3] != "LISTENING":
-                continue
-            addr = parts[1]
-            host, sep, tail = addr.rpartition(":")
-            if not sep or not tail.isdigit():
-                continue
-            if int(tail) != port:
-                continue
-            if parts[4].isdigit() and int(parts[4]) not in pids:
-                pids.append(int(parts[4]))
-        for pid in pids:
-            name, cmdline = "", ""
-            # 优先 wmic: 一次拿到名字**和**命令行。单独用 tasklist 有时会回
-            # 「没有运行的任务匹配指定标准」(进程属于别的用户), 连名字都没有。
+    for pid in pids:
+        name, cmdline = "", ""
+        # 优先 wmic: 一次拿到名字**和**命令行。单独用 tasklist 有时会回
+        # 「没有运行的任务匹配指定标准」(进程属于别的用户), 连名字都没有。
+        try:
+            c = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}",
+                 "get", "Name,CommandLine", "/value"],
+                capture_output=True, text=True, timeout=15,
+                encoding=sec.console_encoding(), errors="replace",
+                creationflags=sec.hidden_flags())
+            for ln in (c.stdout or "").splitlines():
+                ln = ln.strip()
+                if ln.startswith("Name="):
+                    name = ln.split("=", 1)[1].strip()
+                elif ln.startswith("CommandLine="):
+                    cmdline = ln.split("=", 1)[1].strip()
+        except Exception:
+            pass
+        if not name:
             try:
-                c = subprocess.run(
-                    ["wmic", "process", "where", f"ProcessId={pid}",
-                     "get", "Name,CommandLine", "/value"],
+                r2 = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                     capture_output=True, text=True, timeout=15,
                     encoding=sec.console_encoding(), errors="replace",
                     creationflags=sec.hidden_flags())
-                for ln in (c.stdout or "").splitlines():
-                    ln = ln.strip()
-                    if ln.startswith("Name="):
-                        name = ln.split("=", 1)[1].strip()
-                    elif ln.startswith("CommandLine="):
-                        cmdline = ln.split("=", 1)[1].strip()
+                name = (r2.stdout or "").split('","')[0].strip('"') or "?"
             except Exception:
-                pass
-            if not name:
-                try:
-                    r2 = subprocess.run(
-                        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                        capture_output=True, text=True, timeout=15,
-                        encoding=sec.console_encoding(), errors="replace",
-                        creationflags=sec.hidden_flags())
-                    name = (r2.stdout or "").split('","')[0].strip('"') or "?"
-                except Exception:
-                    name = "?"
-            if "没有运行的任务" in name or "No tasks" in name:
                 name = "?"
-            low = (name + " " + cmdline).lower()
-            out.append({"pid": pid, "name": name or "?",
-                        "cmdline": cmdline,
-                        "is_freevpn": "freevpn" in low})
-    except Exception:
-        pass
+        if "没有运行的任务" in name or "No tasks" in name:
+            name = "?"
+        low = (name + " " + cmdline).lower()
+        out.append({"pid": pid, "name": name or "?",
+                    "cmdline": cmdline,
+                    "is_freevpn": "freevpn" in low})
     return out
 
 

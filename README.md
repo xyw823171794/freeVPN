@@ -1,6 +1,6 @@
 # freeVPN (freeVPN)
 
-> 当前版本 **v1.5.0**（见 `version.py` 与 `CHANGELOG.md`）
+> 当前版本 **v1.6.1**（见 `version.py` 与 `CHANGELOG.md`）
 
 把公开免费订阅源聚合成**一个**节点池：自动去重、双层真实测活、安全审计、按地区分组，
 对外给一个本地订阅地址。客户端填一次，之后池子自己刷新，你只挑节点。
@@ -128,6 +128,7 @@ python state/test_cn_rules.py    # 国内分流: 数据文件 + 规则语义 + �
 python state/test-l1-udp.py      # L1 不能把 QUIC(hysteria/tuic) 节点当死节点筛掉 (22 项)
 python state/test_updater.py     # 在线更新: 版本比较 + zip slip + 受保护文件 + apply 脚本 (32 项)
 python state/test-gui-update.py  # 控制台更新页: 控件/初始状态/选项落盘/后台线程 (23 项)
+python state/test-port-holders.py # 端口占用者查询: 两条路线 + 回退 + 精确匹配 (15 项)
 python state/verify.py           # 端到端: 内核加载产物 + 真实 HTTP 出网
 ```
 

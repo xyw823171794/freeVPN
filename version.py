@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """版本信息 —— 单一定义点，pool / gui / pack 都从这里取。"""
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 # 版本号含义（语义化）：
 #   主版本  不兼容的改动（配置格式、产物结构、命令行接口）
@@ -10,7 +10,7 @@ __version__ = "1.6.0"
 #   修订号  向后兼容的缺陷修复
 #
 # 改版本号时同步更新 CHANGELOG.md。
-__release_date__ = "2026-10-09"
+__release_date__ = "2026-10-11"
 
 __title__ = "freeVPN"
 __app_name__ = "freeVPN"

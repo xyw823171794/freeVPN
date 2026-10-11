@@ -962,7 +962,21 @@ class PoolGUI:
         holders = self.port_holders()
         if not holders:
             if ask:
-                messagebox.showinfo("端口空闲", f"端口 {self.port} 没有被占用。")
+                # "查不到占用者" ≠ "端口空闲"。以前这里直接报"没有被占用",
+                # 而用户上一秒可能刚看到"端口被占用"的提示 —— 两句自相矛盾的话
+                # 摆在一起, 只会让人觉得程序坏了。用 port_listening 复核再下结论。
+                if port_listening(self.port):
+                    messagebox.showwarning(
+                        "端口被占用，但查不到占用者",
+                        f"端口 {self.port} 确实有东西在监听，但没查出是哪个进程。\n\n"
+                        "可能的原因：\n"
+                        "  · netstat / Get-NetTCPConnection 被安全软件拦了\n"
+                        "  · 占用者属于别的用户，当前权限看不到\n\n"
+                        "手动看一眼：\n"
+                        f"    netstat -ano | findstr :{self.port}\n"
+                        "最后一列是 PID，再到任务管理器里按 PID 找那个进程。")
+                else:
+                    messagebox.showinfo("端口空闲", f"端口 {self.port} 没有被占用。")
             return True
         if ask:
             lines = []
@@ -1130,7 +1144,10 @@ class PoolGUI:
                             who = "\n".join(
                                 f"  {h['name']}  (PID {h['pid']})"
                                 + ("   ← 另一份 freeVPN" if h.get("is_freevpn") else "")
-                                for h in holders) or "  （查不到，可能刚好释放了）"
+                                for h in holders) or (
+                                "  （查不到占用者。手动看一眼：\n"
+                                f"     netstat -ano | findstr :{self.port}\n"
+                                "   最后一列是 PID）")
                             if messagebox.askyesno(
                                     "端口被占用",
                                     f"常驻起不来：端口 {self.port} 被这些进程占着。\n\n"
