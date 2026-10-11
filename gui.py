@@ -578,6 +578,11 @@ class PoolGUI:
                 "现在开始吗？"):
             self._upd_apply_after_download = False
             return
+        # 先把常驻停掉 —— 脚本要等所有同目录的 freeVPN.exe 退出, daemon 不停
+        # 它会一直等(实测卡死)。GUI 自己马上也会退出, 脚本会把两个都拉回来。
+        n = updater.stop_resident()
+        if n:
+            self.say(f"[更新] 已停掉同目录的 freeVPN 进程 {n} 个（脚本稍后拉回）")
         if updater.launch_apply(bat):
             self.say(f"[更新] 已交给替换脚本，本程序即将退出并自动重启到 v{rv}")
             try:

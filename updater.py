@@ -422,6 +422,46 @@ exit /b 0
 """
 
 
+def stop_resident(root: Path | None = None) -> int:
+    """停掉本目录下的 freeVPN.exe（常驻 / 控制台）。返回结束的进程数。
+
+    **为什么必须做**：替换脚本要等**所有**同目录的 freeVPN.exe 退出才能覆盖 exe，
+    而 daemon 是常驻的 —— 不停它，脚本会永远卡在 "waiting for freeVPN to exit"。
+    实测踩过：一键更新跑完就卡在那儿，版本一个字节都没换。
+
+    按**可执行文件路径**筛，不按进程名 —— 本机可能还装着另一份 freeVPN
+    （比如源码版），按名字会误杀。也不会杀调用者自己。
+    """
+    base = Path(root) if root else sec.app_root()
+    exe = str((base / "freeVPN.exe")).lower()
+    me = os.getpid()
+    killed = 0
+    try:
+        r = subprocess.run(
+            ["wmic", "process", "where", "name='freeVPN.exe'",
+             "get", "ProcessId,ExecutablePath", "/format:csv"],
+            capture_output=True, text=True, timeout=20,
+            encoding=sec.console_encoding(), errors="replace",
+            creationflags=sec.hidden_flags())
+        for line in (r.stdout or "").splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            pid_s, path = parts[-1], parts[-2]
+            if not pid_s.isdigit() or path.lower() != exe:
+                continue
+            pid = int(pid_s)
+            if pid == me:
+                continue          # 别把自己杀了
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, timeout=15,
+                           creationflags=sec.hidden_flags())
+            killed += 1
+    except Exception:
+        pass
+    return killed
+
+
 def launch_apply(bat: Path) -> bool:
     """分离启动替换脚本。**调用方启动成功后应当立刻退出自己。**
 
@@ -542,19 +582,25 @@ def run(check_only: bool = False, force: bool = False, quiet: bool = False,
         return 0
 
     stage_root = update_dir() / rv
-    if stage_root.exists():
-        shutil.rmtree(stage_root, ignore_errors=True)
-    stage_root.mkdir(parents=True, exist_ok=True)
-
-    pkg = stage_root / f"freeVPN-{rv}.zip"
-    print(f"\n[*] 下载 {info['url'][:100]}")
-    download(info["url"], pkg, quiet=quiet)
-    print(f"    已保存 {pkg.stat().st_size // 1024} KB")
-
     payload = stage_root / "payload"
-    payload.mkdir(parents=True, exist_ok=True)
-    root, n = extract_package(pkg, payload)
-    print(f"    解压 {n} 个文件 -> {root}")
+    if payload.is_dir() and any(payload.iterdir()) and not force:
+        # 这一版已经下过了 —— 别重复下 33MB(国内可能要十几分钟)。
+        # 典型场景: 上次替换被打断/卡住, 重来时不该从头再下一遍。
+        print(f"\n[*] v{rv} 已经下载过了, 直接用 {payload}")
+        print("    （想强制重下加 --force）")
+        root = payload
+        n = sum(1 for f in payload.rglob("*") if f.is_file())
+    else:
+        if stage_root.exists():
+            shutil.rmtree(stage_root, ignore_errors=True)
+        stage_root.mkdir(parents=True, exist_ok=True)
+        pkg = stage_root / f"freeVPN-{rv}.zip"
+        print(f"\n[*] 下载 {info['url'][:100]}")
+        download(info["url"], pkg, quiet=quiet)
+        print(f"    已保存 {pkg.stat().st_size // 1024} KB")
+        payload.mkdir(parents=True, exist_ok=True)
+        root, n = extract_package(pkg, payload)
+        print(f"    解压 {n} 个文件 -> {root}")
 
     pv = package_version(root)
     if pv and ver_tuple(pv) != ver_tuple(rv):
@@ -575,6 +621,13 @@ def run(check_only: bool = False, force: bool = False, quiet: bool = False,
     bat = write_apply_script(stage_root)
 
     if apply_now:
+        # 先把常驻/控制台停掉 —— 替换脚本要等**所有**同目录的 freeVPN.exe 退出
+        # 才动手, 而 daemon 是常驻的, 不停它脚本会一直等下去(实测卡死, 版本没换)。
+        # 它们都会被脚本重新拉起来, 用户无感。
+        n = stop_resident()
+        if n:
+            print(f"[*] 已停掉同目录的 freeVPN 进程 {n} 个（脚本稍后会拉回来）")
+            time.sleep(1.5)          # 等文件句柄释放干净
         # 傻瓜式那条路: 启动分离的替换脚本, 自己立刻退出 —— 脚本会等本进程
         # 退出后覆盖文件, 再把新版本拉起来。用户看到的就是"程序自己重启了"。
         print("\n[*] 一键更新: 启动替换脚本, 本程序马上退出")

@@ -148,6 +148,14 @@ def main() -> int:
     # 老用户靠不上它。
     check("脚本会把常驻服务重启回来", "daemon" in updater.APPLY_BAT)
     check("有分离启动替换脚本的入口", callable(updater.launch_apply))
+    # 替换脚本要等**所有**同目录的 freeVPN.exe 退出才动手, 而 daemon 是常驻的
+    # —— apply 之前不停它, 脚本会永远卡在"waiting for freeVPN to exit"(实测踩过)。
+    check("apply 前能停掉同目录的常驻进程", callable(updater.stop_resident))
+    try:
+        r = updater.stop_resident()          # 本进程不是 freeVPN.exe, 应该返回 0
+        check("stop_resident 不会误杀调用者", isinstance(r, int) and r >= 0, f"返回 {r}")
+    except Exception as e:
+        check("stop_resident 不会误杀调用者", False, f"{type(e).__name__}: {e}")
     # 实际布局是 state\update\<版本>\payload —— 比脚本低一层。第一版写成
     # `%~dp0payload`, robocopy 报 16(隔离演练抓到的)。
     body = data.decode("ascii")
