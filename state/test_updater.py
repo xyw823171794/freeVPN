@@ -143,6 +143,10 @@ def main() -> int:
           "pause" not in updater.APPLY_BAT.lower())
     check("脚本会把过程写进 apply.log", "apply.log" in updater.APPLY_BAT)
     check("脚本最后会拉起新版本", "start \"\"" in updater.APPLY_BAT)
+    # 更新时 daemon 被杀了才能换 exe, 不把它拉回来订阅就一直是断的 —— 而且
+    # GUI 的"首次自动拉起常驻"只在全新目录生效(有 report.json 就直接 return),
+    # 老用户靠不上它。
+    check("脚本会把常驻服务重启回来", "daemon" in updater.APPLY_BAT)
     check("有分离启动替换脚本的入口", callable(updater.launch_apply))
     # 实际布局是 state\update\<版本>\payload —— 比脚本低一层。第一版写成
     # `%~dp0payload`, robocopy 报 16(隔离演练抓到的)。

@@ -21,6 +21,7 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -220,15 +221,23 @@ def remote_info() -> dict:
 # 下载 / 解压
 # --------------------------------------------------------------------------
 def download(url: str, dest: Path, quiet: bool = False, on_progress=None) -> Path:
-    """下载到 dest。带体积上限与进度输出。
+    """下载到 dest。带体积上限、进度回调、**断点续传**。
+
+    续传是刚需不是锦上添花: 国内拉 GitHub Release 常年只有几十 KB/s, 33MB 的包
+    要十几分钟, 中途断一次就得从头再来 —— 实测踩过(10 分钟下到 23MB 被打断)。
 
     on_progress(got, total) 给 GUI 用 —— 有回调时不再往 stdout 打进度。
     """
     if not url.lower().startswith("https://"):
         raise ValueError(f"更新包必须是 https: {url}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
     tmp = dest.with_suffix(dest.suffix + ".part")
+
+    # 断点续传: 半截文件还在就带 Range 接着下
+    start = tmp.stat().st_size if tmp.exists() else 0
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    if start:
+        req.add_header("Range", f"bytes={start}-")
     p = local_proxy()          # 有代理就先走代理, 见 _get 的说明
     try:
         resp = (_open_via(p, req, TIMEOUT) if p
@@ -240,9 +249,19 @@ def download(url: str, dest: Path, quiet: bool = False, on_progress=None) -> Pat
             raise
         print(f"[*] 本机代理 {p} 走不通({type(e).__name__}), 改直连")
         resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-    got = 0
-    with resp as r, open(tmp, "wb") as fh:
-        total = int(r.headers.get("Content-Length") or 0)
+
+    # 206 = 服务器接受了 Range, 可以接着写; 200 = 不支持, 从头来
+    partial = start > 0 and getattr(resp, "status", 200) == 206
+    if start and not partial:
+        print("[*] 服务器不支持断点续传, 从头下载")
+        start = 0
+    elif start:
+        print(f"[*] 续传: 已有 {start // 1048576}MB, 接着下")
+
+    got = start
+    t0 = time.time()
+    with resp as r, open(tmp, "ab" if partial else "wb") as fh:
+        total = int(r.headers.get("Content-Length") or 0) + (start if partial else 0)
         while True:
             chunk = r.read(262144)
             if not chunk:
@@ -258,12 +277,17 @@ def download(url: str, dest: Path, quiet: bool = False, on_progress=None) -> Pat
                     on_progress(got, total)
                 except Exception:
                     pass
-            elif not quiet and total:
-                pct = got * 100 // total
-                print(f"\r    下载 {got // 1024 // 1024}MB / {total // 1024 // 1024}MB"
-                      f"  {pct}%", end="", flush=True)
+            elif not quiet:
+                el = max(0.001, time.time() - t0)
+                spd = got / el / 1024          # KB/s
+                done = f"{got // 1048576}MB"
+                allmb = f"{total // 1048576}MB" if total else "?"
+                pct = f"  {got * 100 // total}%" if total else ""
+                print(f"\r    下载 {done} / {allmb}{pct}  ({spd:.0f} KB/s)",
+                      end="", flush=True)
     if not quiet and on_progress is None:
-        print()
+        el = max(0.001, time.time() - t0)
+        print(f"\n    完成 {got // 1048576}MB, 平均 {got / el / 1024:.0f} KB/s")
     os.replace(tmp, dest)
     return dest
 
@@ -381,7 +405,13 @@ if errorlevel 8 (
 REM The payload never contains state\ out\ bin\ or the subscription-address
 REM file, so the user's data cannot be touched by this copy.
 
-echo [%DATE% %TIME%] starting new version >> "%LOG%"
+REM Bring the resident service back up. It had to be killed so the exe could be
+REM replaced; without this the subscription stays dark until the user notices.
+REM No --port here on purpose: daemon reads pool.conf.json like everything else.
+echo [%DATE% %TIME%] restarting resident service >> "%LOG%"
+start "" "%DST%\freeVPN.exe" daemon --log "%DST%\state\daemon.log"
+
+echo [%DATE% %TIME%] starting GUI >> "%LOG%"
 if exist "%DST%\freeVPN.exe" (
   start "" "%DST%\freeVPN.exe"
 ) else (

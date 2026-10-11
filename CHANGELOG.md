@@ -4,6 +4,52 @@
 
 ---
 
+## v1.6.4 — 2026-10-11
+
+### 一键更新后常驻不再断掉
+
+v1.6.3 的一键更新把程序重启了，但**订阅服务没跟着起来** —— 替换脚本只 `start` 了
+GUI，而 GUI 的「首次打开自动拉起常驻」有这么一句：
+
+```python
+if (OUT / "report.json").exists():
+    return          # 只在全新目录才自动起常驻
+```
+
+老用户早就有产物了，于是更新完 daemon 是停的，订阅地址一直连不上，直到用户自己
+发现。
+
+**修法**：替换脚本在启动 GUI **之前**先把常驻拉回来：
+
+```bat
+start "" "%DST%\freeVPN.exe" daemon --log "%DST%\state\daemon.log"
+```
+
+不带 `--port` —— daemon 和其他命令一样读 `pool.conf.json`，用户改过端口也跟得上。
+
+实测日志（全程 0.4 秒，静默无窗口）：
+
+```
+[..] update start
+[..] from C:\freeVPN\state\update\1.6.3\payload
+[..] to   C:\freeVPN
+[..] waiting for freeVPN to exit
+[..] copying files
+[..] restarting resident service
+[..] starting GUI
+[..] done
+```
+
+起来后 `daemon` 和 GUI 各一个进程，8787 在听，订阅 200。
+
+### 下载慢：断点续传 + 显示速度
+
+国内拉 GitHub Release 常年只有几十 KB/s，33MB 的包要十几分钟，中途断一次就得从头
+再来（实测 10 分钟下到 23MB 被打断，前功尽弃）。现在带 `Range` 接着下，进度里也
+显示 KB/s —— 至少用户知道它在动。
+
+---
+
 ## v1.6.3 — 2026-10-11
 
 ### 一键更新：点一下，程序自己重启
